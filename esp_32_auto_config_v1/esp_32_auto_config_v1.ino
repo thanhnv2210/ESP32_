@@ -1,10 +1,12 @@
 #include <WiFi.h>
 #include <WebServer.h>
+#include <Preferences.h>
+
+Preferences preferences;
 
 const char* ap_ssid = "ESP32_Config";
 const char* ap_password = "123456789";
 
-// Web server runs on port 80
 WebServer server(80);
 
 String ssid = "";
@@ -30,23 +32,24 @@ const char* html_page = R"rawliteral(
 </html>
 )rawliteral";
 
-// Handle root request
 void handleRoot() {
   server.send(200, "text/html", html_page);
 }
 
-// Handle form submission to save Wi-Fi credentials
 void handleSave() {
   if (server.hasArg("ssid") && server.hasArg("pass")) {
     ssid = server.arg("ssid");
     password = server.arg("pass");
 
-    // Save credentials to non-volatile storage (optional)
-    // For simplicity, using global variables here
-
+    // Save to Preferences
+    preferences.begin("wifi", false);
+    preferences.putString("ssid", ssid);
+    preferences.putString("pass", password);
+    preferences.end();
+    
     server.send(200, "text/html", "<h3>Credentials Saved. Rebooting...</h3>");
     delay(2000);
-    ESP.restart(); // Restart to connect to new Wi-Fi
+    ESP.restart();
   } else {
     server.send(400, "text/plain", "Missing parameters");
   }
@@ -54,14 +57,44 @@ void handleSave() {
 
 void setup() {
   Serial.begin(115200);
-  
-  // Start as AP
-  WiFi.softAP(ap_ssid, ap_password);
-  Serial.println("Access Point started");
-  Serial.print("AP IP address: ");
-  Serial.println(WiFi.softAPIP());
 
-  // Define routes
+  preferences.begin("wifi", false);
+  String stored_ssid = preferences.getString("ssid", "");
+  String stored_pass = preferences.getString("pass", "");
+  preferences.end();
+
+  if (stored_ssid != "") {
+    ssid = stored_ssid;
+    password = stored_pass;
+  }
+
+  if (ssid != "" && WiFi.status() != WL_CONNECTED) {
+    Serial.println("Trying to connect to saved Wi-Fi...");
+    WiFi.begin(ssid.c_str(), password.c_str());
+    unsigned long startAttemptTime = millis();
+    while (millis() - startAttemptTime < 20000) { // 20 seconds timeout
+      if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("Connected!");
+        Serial.print("IP: ");
+        Serial.println(WiFi.localIP());
+        break;
+      }
+      delay(1000);
+    }
+    if (WiFi.status() != WL_CONNECTED) {
+      Serial.println("Failed to connect using saved credentials");
+      // Fall through to AP mode for reconfig
+    }
+  }
+
+  if (WiFi.status() != WL_CONNECTED) {
+    // Start AP mode for configuration
+    WiFi.softAP(ap_ssid, ap_password);
+    Serial.println("Access Point started");
+    Serial.print("AP IP address: ");
+    Serial.println(WiFi.softAPIP());
+  }
+
   server.on("/", handleRoot);
   server.on("/save", HTTP_POST, handleSave);
   server.begin();
@@ -70,22 +103,4 @@ void setup() {
 
 void loop() {
   server.handleClient();
-  // Optional: attempt Wi-Fi connection if credentials are set
-  if (ssid != "" && WiFi.status() != WL_CONNECTED) {
-    Serial.println("Trying to connect to Wi-Fi...");
-    WiFi.begin(ssid.c_str(), password.c_str());
-    unsigned long startAttemptTime = millis();
-    while (millis() - startAttemptTime < 20000) { // 20 seconds timeout
-      if (WiFi.status() == WL_CONNECTED) {
-        Serial.println("Connected!");
-        Serial.print("IP Address: ");
-        Serial.println(WiFi.localIP());
-        break;
-      }
-      delay(1000);
-    }
-    if (WiFi.status() != WL_CONNECTED) {
-      Serial.println("Failed to connect");
-    }
-  }
 }
